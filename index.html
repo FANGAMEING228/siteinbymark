@@ -2,315 +2,47 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>GitHub Game Index Builder</title>
-<style>
-body{font-family:sans-serif;margin:1.5em;max-width:1100px;font-size:15px}
-h1{font-size:1.5em}
-h3{font-size:1.1em}
-fieldset{margin:1em 0;padding:1em}
-table{border-collapse:collapse;width:100%}
-th,td{border:1px solid #aaa;padding:3px 6px;text-align:left;vertical-align:top}
-td{font-size:13px}
-.log{white-space:pre-wrap;background:#111;color:#0f0;padding:8px;font-family:monospace;font-size:12px;height:160px;overflow:auto}
-iframe{width:100%;height:420px;border:1px solid #aaa;background:#fff}
-.err{color:#f66}
-.ok{color:#6f6}
-.hint{color:#555;font-size:13px}
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mark-games</title>
+<style>body{background:#0f1115;color:#d7dae0;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;max-width:760px;margin:0 auto;padding:2.5em 1.2em;line-height:1.5}
+h1{color:#fff;font-size:1.9em;border-bottom:2px solid #4f8cff;padding-bottom:.3em;margin-bottom:.2em}
+.intro{color:#8b93a1}
+.games{list-style:none;padding:0;margin:1.6em 0;display:grid;gap:.9em}
+.card{background:#171a21;border:1px solid #2a2f3a;border-radius:8px;padding:.9em 1.1em}
+.card a.play{color:#4f8cff;text-decoration:none;font-weight:600;font-size:1.12em}
+.card a.play:hover{text-decoration:underline}
+.card a.src{color:#8b93a1;font-size:.85em;margin-left:.7em}
+.badge{display:inline-block;background:#12351f;color:#3fbf7f;border:1px solid #1f5a35;font-size:.68em;padding:.15em .55em;border-radius:99px;margin-right:.7em;vertical-align:2px;text-transform:uppercase;letter-spacing:.06em}
+.badge.dim{background:#232833;color:#8b93a1;border-color:#3a4150}
+.desc{margin:.4em 0 0;color:#aab1bd;font-size:.92em}
+footer{color:#8b93a1;font-size:.82em;border-top:1px solid #2a2f3a;padding-top:.8em;margin-top:1.5em}</style>
 </head>
 <body>
-<h1>GitHub Game Index Builder</h1>
-<p>Static page, runs fully in your browser. It loads your GitHub repos with an access token, auto-ticks the ones that look like games, and builds a plain website with a link to every one of them (play link if GitHub Pages / homepage exists, otherwise the repo page). Download the site as <code>index.html</code> or publish it straight to a GitHub Pages repo.</p>
-
-<fieldset>
-<legend>1. Token</legend>
-<input id="token" type="password" size="48" placeholder="ghp_...">
-<label><input type="checkbox" id="remember"> remember in this browser (localStorage)</label>
-<button id="loadBtn">Load my repos</button>
-<span id="authStatus"></span>
-<p class="hint">Classic token with <code>repo</code> scope = listing + publishing. Read-only token = listing + download only. The token is only sent to api.github.com from this page.</p>
-</fieldset>
-
-<fieldset>
-<legend>2. Repos &ndash; untick anything that is not a game</legend>
-<div id="repoCount" class="hint">Not loaded yet.</div>
-<button id="allBtn">tick all</button>
-<button id="noneBtn">tick none</button>
-<div id="repoList"></div>
-</fieldset>
-
-<fieldset>
-<legend>3. Build / download / publish the site</legend>
-<label>Site title: <input id="siteTitle" size="40" value="My Games"></label><br><br>
-<label>Intro line (optional): <input id="siteIntro" size="60" placeholder="e.g. Small games I built, click a title to play"></label><br><br>
-<button id="previewBtn">1) Preview</button>
-<button id="downloadBtn">2) Download index.html</button>
-<br><br>
-<label>Publish repo name: <input id="pubRepo" size="25" value="games"></label>
-<button id="publishBtn">3) Publish to GitHub Pages</button>
-<p class="hint">Publish creates the repo if it does not exist, commits index.html, enables Pages, and gives you the URL. If a repo with that name already exists, its <code>index.html</code> gets overwritten. First Pages build takes about a minute. Repo list = your own (owner) repos only.</p>
-<div id="siteUrl"></div>
-</fieldset>
-
-<h3>Log</h3>
-<div class="log" id="log"></div>
-
-<h3>Preview</h3>
-<iframe id="preview" title="generated site preview"></iframe>
-
-<script>
-"use strict";
-var $ = function(id){ return document.getElementById(id); };
-var logEl = $("log");
-function esc(s){
-  return String(s).replace(/[&<>"']/g, function(c){
-    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
-  });
-}
-function log(msg, cls){
-  var line = document.createElement("div");
-  if(cls) line.className = cls;
-  line.textContent = "[" + new Date().toLocaleTimeString() + "] " + msg;
-  logEl.appendChild(line);
-  logEl.scrollTop = logEl.scrollHeight;
-}
-
-var me = null;
-var repos = [];
-
-var savedToken = "";
-try { savedToken = localStorage.getItem("gh_games_token") || ""; } catch(e) {}
-if(savedToken){ $("token").value = savedToken; $("remember").checked = true; }
-
-function getToken(){ return $("token").value.trim(); }
-
-function api(path, opts){
-  opts = opts || {};
-  var headers = {
-    "Authorization": "Bearer " + getToken(),
-    "Accept": "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28"
-  };
-  var init = { method: opts.method || "GET", headers: headers };
-  if(opts.body){ headers["Content-Type"] = "application/json"; init.body = JSON.stringify(opts.body); }
-  return fetch("https://api.github.com" + path, init).then(function(res){
-    return res.text().then(function(text){
-      var data = null;
-      try { data = text ? JSON.parse(text) : null; } catch(e) {}
-      if(!res.ok){
-        var msg = (data && data.message) ? data.message : (res.status + " " + res.statusText);
-        if(res.status === 401) throw new Error("401 unauthorized (bad token or missing scope): " + msg);
-        throw new Error("GitHub API " + res.status + ": " + msg);
-      }
-      return data;
-    });
-  });
-}
-
-var KEYWORDS = /\b(game|games|gaming|rpg|roguelike|platformer|shooter|puzzle|arcade|tetris|snake|chess|sudoku|minesweeper|pygame|phaser|godot|unity|gameboy|game-?jam)\b/i;
-function looksLikeGame(r){
-  var topics = r.topics || [];
-  for(var i = 0; i < topics.length; i++){ if(/^game/i.test(topics[i])) return true; }
-  return KEYWORDS.test(r.name || "") || KEYWORDS.test(r.description || "");
-}
-
-function playUrl(r){
-  if(r.homepage && /^https?:\/\//i.test(r.homepage)) return r.homepage;
-  if(!me) return null;
-  if(r.has_pages){
-    if(r.name.toLowerCase() === me.login.toLowerCase() + ".github.io") return "https://" + me.login + ".github.io/";
-    return "https://" + me.login + ".github.io/" + r.name + "/";
-  }
-  return null;
-}
-
-$("loadBtn").addEventListener("click", async function(){
-  if(!getToken()){ log("Paste a token first.", "err"); return; }
-  try{
-    $("loadBtn").disabled = true;
-    try{
-      if($("remember").checked) localStorage.setItem("gh_games_token", getToken());
-      else localStorage.removeItem("gh_games_token");
-    }catch(e){}
-    log("GET /user ...");
-    me = await api("/user");
-    $("authStatus").textContent = "logged in as " + me.login;
-    log("Logged in as " + me.login + ". Fetching your (owner) repos ...", "ok");
-    repos = [];
-    for(var page = 1; page <= 20; page++){
-      var batch = await api("/user/repos?type=owner&sort=updated&per_page=100&page=" + page);
-      repos = repos.concat(batch);
-      if(batch.length < 100) break;
-    }
-    var games = 0;
-    for(var i = 0; i < repos.length; i++){ if(looksLikeGame(repos[i])) games++; }
-    log("Fetched " + repos.length + " owned repos, " + games + " look like games.", "ok");
-    renderRepos();
-  }catch(e){
-    log(e.message, "err");
-  }finally{
-    $("loadBtn").disabled = false;
-  }
-});
-
-function renderRepos(){
-  var list = $("repoList");
-  list.innerHTML = "";
-  if(!repos.length){ $("repoCount").textContent = "No owned repos found for this account."; return; }
-  var games = 0;
-  var tbl = document.createElement("table");
-  var head = tbl.insertRow(-1);
-  ["use", "repo", "description", "playable?", "pushed"].forEach(function(h){
-    var th = document.createElement("th");
-    th.textContent = h;
-    head.appendChild(th);
-  });
-  for(var i = 0; i < repos.length; i++){
-    var r = repos[i];
-    var g = looksLikeGame(r);
-    if(g) games++;
-    var playable = ((r.homepage && /^https?:/i.test(r.homepage)) || r.has_pages) ? "yes" : "-";
-    var tr = tbl.insertRow(-1);
-    var td0 = tr.insertCell(-1);
-    var cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.className = "pick";
-    cb.dataset.i = i;
-    cb.checked = g;
-    td0.appendChild(cb);
-    var td1 = tr.insertCell(-1);
-    var a = document.createElement("a");
-    a.href = r.html_url;
-    a.target = "_blank";
-    a.textContent = r.name;
-    td1.appendChild(a);
-    tr.insertCell(-1).textContent = r.description || "";
-    tr.insertCell(-1).textContent = playable;
-    tr.insertCell(-1).textContent = (r.pushed_at || "").slice(0, 10);
-  }
-  list.appendChild(tbl);
-  $("repoCount").textContent = repos.length + " repos loaded, " + games + " auto-ticked as games. Untick what is not a game, then go to step 3.";
-}
-
-function selected(){
-  var out = [];
-  document.querySelectorAll("input.pick").forEach(function(cb){
-    var r = repos[Number(cb.dataset.i)];
-    if(r && cb.checked) out.push(r);
-  });
-  return out;
-}
-
-function buildHtml(sel){
-  var title = $("siteTitle").value.trim() || "My Games";
-  var intro = $("siteIntro").value.trim();
-  var items = sel.slice().sort(function(a, b){ return a.name.localeCompare(b.name); }).map(function(r){
-    var play = playUrl(r);
-    var desc = r.description ? " &ndash; " + esc(r.description) : "";
-    var link = play
-      ? '<a href="' + esc(play) + '">' + esc(r.name) + '</a> <small>(<a href="' + esc(r.html_url) + '">source</a>)</small>'
-      : '<a href="' + esc(r.html_url) + '">' + esc(r.name) + '</a> <small>(repo only &ndash; no playable link found)</small>';
-    return "<li>" + link + desc + "</li>";
-  }).join("\n");
-  var lines = [
-    "<!doctype html>",
-    '<html lang="en">',
-    "<head>",
-    '<meta charset="utf-8">',
-    "<title>" + esc(title) + "</title>",
-    "</head>",
-    "<body>",
-    "<h1>" + esc(title) + "</h1>"
-  ];
-  if(intro) lines.push("<p>" + esc(intro) + "</p>");
-  lines.push("<ul>");
-  lines.push(items);
-  lines.push("</ul>");
-  lines.push("<hr>");
-  lines.push("<p><small>" + sel.length + " games &ndash; generated " + new Date().toISOString() + " by GitHub Game Index Builder</small></p>");
-  lines.push("</body>");
-  lines.push("</html>");
-  return lines.join("\n");
-}
-
-$("allBtn").addEventListener("click", function(){
-  document.querySelectorAll("input.pick").forEach(function(c){ c.checked = true; });
-});
-$("noneBtn").addEventListener("click", function(){
-  document.querySelectorAll("input.pick").forEach(function(c){ c.checked = false; });
-});
-
-$("previewBtn").addEventListener("click", function(){
-  var sel = selected();
-  if(!sel.length){ log("Nothing ticked.", "err"); return; }
-  $("preview").srcdoc = buildHtml(sel);
-  log("Preview updated (" + sel.length + " games).", "ok");
-});
-
-$("downloadBtn").addEventListener("click", function(){
-  var sel = selected();
-  if(!sel.length){ log("Nothing ticked.", "err"); return; }
-  var html = buildHtml(sel);
-  var blob = new Blob([html], { type: "text/html" });
-  var a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "index.html";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  log("Downloaded index.html (" + sel.length + " games).", "ok");
-});
-
-$("publishBtn").addEventListener("click", async function(){
-  if(!me){ log("Click 'Load my repos' first (I need your login).", "err"); return; }
-  var sel = selected();
-  if(!sel.length){ log("Tick at least one game.", "err"); return; }
-  var name = $("pubRepo").value.trim();
-  if(!/^[A-Za-z0-9._-]+$/.test(name) || name.length > 100){ log("Invalid repo name.", "err"); return; }
-  try{
-    $("publishBtn").disabled = true;
-    var repo, created = false;
-    try{
-      repo = await api("/repos/" + me.login + "/" + name);
-      log("Repo already exists: " + repo.full_name);
-    }catch(e){
-      log("Creating repo '" + name + "' ...");
-      repo = await api("/user/repos", { method: "POST", body: { name: name, description: "Index of my games", auto_init: true, private: false } });
-      created = true;
-      log("Created repo " + repo.full_name + ".", "ok");
-    }
-    var branch = repo.default_branch || "main";
-    var sha = null;
-    try{
-      var f = await api("/repos/" + me.login + "/" + name + "/contents/index.html");
-      sha = f.sha;
-      log("index.html already exists, updating it.");
-    }catch(e){ /* no file yet */ }
-    var html = buildHtml(sel);
-    var content = btoa(unescape(encodeURIComponent(html)));
-    var body = { message: "update games index", content: content, branch: branch };
-    if(sha) body.sha = sha;
-    await api("/repos/" + me.login + "/" + name + "/contents/index.html", { method: "PUT", body: body });
-    log("Committed index.html to branch '" + branch + "'.", "ok");
-    if(!repo.has_pages){
-      try{
-        await api("/repos/" + me.login + "/" + name + "/pages", { method: "POST", body: { source: { branch: branch, path: "/" } } });
-        log("GitHub Pages enabled.", "ok");
-      }catch(e){
-        log("Could not enable Pages automatically (" + e.message + "). Enable it once in the repo's Settings > Pages.", "err");
-      }
-    }
-    var url = (name.toLowerCase() === me.login.toLowerCase() + ".github.io")
-      ? "https://" + me.login + ".github.io/"
-      : "https://" + me.login + ".github.io/" + name + "/";
-    $("siteUrl").innerHTML = 'Live site (first build takes ~1 min): <a href="' + url + '" target="_blank">' + url + "</a>";
-    log("DONE. Site will appear at " + url, "ok");
-  }catch(e){
-    log(e.message, "err");
-  }finally{
-    $("publishBtn").disabled = false;
-  }
-});
-</script>
+<h1>mark-games</h1>
+<p class="intro">my games</p>
+<ul class="games">
+<li class="card"><span class="badge">playable</span><a class="play" href="https://2d-pixel-bike-game-51.vercel.app">2d-pixel-bike-game-51</a><a class="src" href="https://github.com/FANGAMEING228/2d-pixel-bike-game-51">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://2d-pixel-train-game-51.vercel.app">2d-pixel-train-game-51</a><a class="src" href="https://github.com/FANGAMEING228/2d-pixel-train-game-51">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://blc-v1.vercel.app">blc-v1</a><a class="src" href="https://github.com/FANGAMEING228/blc-v1">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://blc-v1-modded.vercel.app">blc-v1-modded</a><a class="src" href="https://github.com/FANGAMEING228/blc-v1-modded">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://FANGAMEING228.github.io/click-grow/">click-grow</a><a class="src" href="https://github.com/FANGAMEING228/click-grow">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://copomo-delta.vercel.app">copomo</a><a class="src" href="https://github.com/FANGAMEING228/copomo">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://digger-3d-online.vercel.app">digger-3d-online</a><a class="src" href="https://github.com/FANGAMEING228/digger-3d-online">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://femboy-clicker-seven.vercel.app">femboy-clicker</a><a class="src" href="https://github.com/FANGAMEING228/femboy-clicker">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://FANGAMEING228.github.io/fishing-sim-2026p/">fishing-sim-2026p</a><a class="src" href="https://github.com/FANGAMEING228/fishing-sim-2026p">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://flapy-pros.vercel.app">flapy-pros</a><a class="src" href="https://github.com/FANGAMEING228/flapy-pros">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://flower-testing-plum.vercel.app">flower-testing</a><a class="src" href="https://github.com/FANGAMEING228/flower-testing">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://glt-dun.vercel.app">gorila-locomotion-test</a><a class="src" href="https://github.com/FANGAMEING228/gorila-locomotion-test">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://gta-6-low-budget-edition.vercel.app">gta-6-low-budget-edition</a><a class="src" href="https://github.com/FANGAMEING228/gta-6-low-budget-edition">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://FANGAMEING228.github.io/kia-boys-game/">kia-boys-game</a><a class="src" href="https://github.com/FANGAMEING228/kia-boys-game">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://mark-games.vercel.app">mark-games</a><a class="src" href="https://github.com/FANGAMEING228/mark-games">source</a><p class="desc">Index of my games</p></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://musor-drop-v1.vercel.app">musor-drop</a><a class="src" href="https://github.com/FANGAMEING228/musor-drop">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://pantograph-sim.vercel.app">pantograph-sim</a><a class="src" href="https://github.com/FANGAMEING228/pantograph-sim">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://pants3d.vercel.app">pants3d</a><a class="src" href="https://github.com/FANGAMEING228/pants3d">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://pvo-henna.vercel.app">pvo</a><a class="src" href="https://github.com/FANGAMEING228/pvo">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://shaski-umber.vercel.app">shaski</a><a class="src" href="https://github.com/FANGAMEING228/shaski">source</a></li>
+<li class="card"><span class="badge">playable</span><a class="play" href="https://vmir.vercel.app">vmir</a><a class="src" href="https://github.com/FANGAMEING228/vmir">source</a></li>
+</ul>
+<footer>21 games &ndash; generated 2026-11-15T11:41:34.432Z by GitHub Game Index Builder</footer>
 </body>
 </html>
